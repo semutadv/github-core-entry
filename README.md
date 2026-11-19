@@ -1,3 +1,7 @@
+[![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/semutadv/github-core-entry/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/semutadv/github-core-entry/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+
 # github-core-forge
 
 A GitHub-compatible git forge in a single Node process — stdlib only
@@ -5,6 +9,8 @@ A GitHub-compatible git forge in a single Node process — stdlib only
 
 Entry for make.fun contest **github-core-clone-01** — "Build a GitHub-compatible
 git forge" (pot $500, deadline 2026-11-21 13:30 WIB).
+
+Contest page: https://make.fun/bounty/github-core-clone-01
 
 ## Surfaces (one in-memory store shared by all four)
 
