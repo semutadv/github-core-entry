@@ -245,21 +245,36 @@ export function readPack(buf: Buffer): Map<string, GitObject> {
     if (typeNum === 6 || typeNum === 7) throw new Error('delta objects not supported');
     const type = NUM_TYPE[typeNum];
     if (!type) throw new Error(`unknown object type ${typeNum}`);
-    // The zlib stream's end is the smallest offset whose inflation yields the
-    // declared size: a shorter slice throws ("unexpected end of file"), a
-    // longer one inflates fine (trailing bytes are ignored). Monotonic, so
-    // binary-search it instead of probing byte by byte.
+    // One inflate per object: inflateSync ignores trailing bytes, and with
+    // { info: true } the engine reports exactly how many input bytes the
+    // zlib stream consumed (engine.bytesWritten). That replaces the binary
+    // search for the stream end below. If the fast path looks inconsistent
+    // (wrong size, no byte count), fall back to the binary search.
     let data: Buffer | null = null;
     let consumed = 0;
-    let lo = off + 1;
-    let hi = buf.length;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      try {
-        const cand = inflateSync(buf.subarray(off, mid));
-        if (cand.length === size) { data = cand; consumed = mid - off; hi = mid - 1; }
-        else lo = mid + 1;
-      } catch { lo = mid + 1; }
+    try {
+      const out = inflateSync(buf.subarray(off), { info: true }) as unknown as { buffer: Buffer; engine: { bytesWritten?: unknown } };
+      const bw = out.engine?.bytesWritten;
+      if (out.buffer.length === size && typeof bw === 'number' && bw > 0 && off + bw <= buf.length) {
+        data = out.buffer;
+        consumed = bw;
+      }
+    } catch { /* fall through to the binary search */ }
+    if (data === null) {
+      // The zlib stream's end is the smallest offset whose inflation yields the
+      // declared size: a shorter slice throws ("unexpected end of file"), a
+      // longer one inflates fine (trailing bytes are ignored). Monotonic, so
+      // binary-search it instead of probing byte by byte.
+      let lo = off + 1;
+      let hi = buf.length;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        try {
+          const cand = inflateSync(buf.subarray(off, mid));
+          if (cand.length === size) { data = cand; consumed = mid - off; hi = mid - 1; }
+          else lo = mid + 1;
+        } catch { lo = mid + 1; }
+      }
     }
     if (data === null) throw new Error('pack entry inflate failed');
     off += consumed;
@@ -334,7 +349,7 @@ export interface Repo {
   pulls: PullRec[]; pullSeq: number;
   commitMsg: Map<string, string>;
   version: number;
-  packCache: Map<string, Buffer>;
+  packCache: Map<string, { pack: Buffer; shallowOut: string[]; unshallow: string[]; objects: Map<string, GitObject> }>;
 }
 function newRepo(name: string, description: string, isPrivate: boolean): Repo {
   const id = ++repoSeq;
@@ -715,8 +730,13 @@ function handleInfoRefsV2(r: Repo, service: string, res: ServerResponse): void {
 }
 function computeFetchPack(r: Repo, wants: string[], haves: string[], depth: number | undefined, shallow: string[]): { pack: Buffer; shallowOut: string[]; unshallow: string[]; objects: Map<string, GitObject> } {
   const shallowSet = new Set(shallow);
-  const cacheKey = `${r.version}|${wants.join(',')}|${haves.join(',')}|${depth ?? ''}|${shallow.join(',')}`;
+  const cacheKey = `${r.version}|${r.objects.size}|${wants.join(',')}|${haves.join(',')}|${depth ?? ''}|${shallow.join(',')}`;
+  // The key names the exact fetch: same repo version (bump() clears this
+  // cache on every mutation, so a hit can only come from the same state),
+  // same wants/haves/depth/shallow. A hit returns the same pack and the
+  // same shallow/unshallow lists; callers only read them, never mutate.
   const cached = r.packCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const wantC = collectClosure(r, wants, depth, shallowSet, false);
   const haveC = haves.length ? collectClosure(r, haves, undefined, shallowSet, true) : { objects: new Map<string, GitObject>(), shallowOut: [], commits: new Set<string>() };
   const send = new Map<string, GitObject>();
@@ -724,8 +744,9 @@ function computeFetchPack(r: Repo, wants: string[], haves: string[], depth: numb
   const shallowOut = depth !== undefined ? wantC.shallowOut : [];
   const unshallow = [...shallowSet].filter((s) => wantC.commits.has(s) && !shallowOut.includes(s));
   const pack = writePack([...send.values()]);
-  if (cached === undefined) r.packCache.set(cacheKey, pack);
-  return { pack, shallowOut, unshallow, objects: send };
+  const result = { pack, shallowOut, unshallow, objects: send };
+  r.packCache.set(cacheKey, result);
+  return result;
 }
 function handleUploadPackV2(r: Repo, body: Buffer, res: ServerResponse): void {
   const { pkts } = decodePktLines(body);
